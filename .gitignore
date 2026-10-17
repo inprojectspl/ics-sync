@@ -1,0 +1,17 @@
+# Binary built locally with `go build`
+/ics-sync
+/dist/
+/bin/
+
+# Go test and build artifacts
+*.exe
+*.test
+*.out
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+site/
