@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -29,8 +30,10 @@ var zeroTime = time.Unix(1, 0).UTC()
 //
 // Git metadata is always left out: a CI checkout's .git holds the whole
 // history and often the job token in .git/config. Symlinks and other
-// non-regular files are skipped, so nothing outside `root` is read.
-func Write(w io.Writer, root string, exclude []string) (int, error) {
+// non-regular files are skipped, so nothing outside `root` is read. `skip`
+// names absolute paths left out as well, such as the file `w` writes to
+// when it lies under `root`.
+func Write(w io.Writer, root string, exclude []string, skip ...string) (int, error) {
 	rootAbs, err := filepath.Abs(root)
 	if err != nil {
 		return 0, err
@@ -54,7 +57,7 @@ func Write(w io.Writer, root string, exclude []string) (int, error) {
 			}
 			return nil
 		}
-		if d.IsDir() || !d.Type().IsRegular() {
+		if d.IsDir() || !d.Type().IsRegular() || slices.Contains(skip, p) {
 			return nil
 		}
 		rel, err := filepath.Rel(rootAbs, p)

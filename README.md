@@ -65,7 +65,7 @@ ghcr.io/inprojectspl/ics-sync:1
 ```
 
 `:1` is the stable major version: it moves to every `v1.x.y` release and becomes `:2` only for
-a breaking change in the config format or the sync protocol. Pin a release (`:1.1.0`) or a
+a breaking change in the config format or the sync protocol. Pin a release (`:1.1.1`) or a
 commit (`:<sha>`) for fully reproducible jobs; see [Image tags](#image-tags).
 
 ### CI/CD variables
@@ -124,6 +124,9 @@ supported, `**/name` is not); any other pattern uses Go's
 
 **Always left out:** `.git` directories and the `.git` files of submodules, symlinks and other
 non-regular files, and empty directories.
+
+**Strict parsing.** A key the CLI does not know (a typo such as `soruce`) or a malformed exclude
+pattern stops the CLI before anything is packed, so a typo cannot widen what is published.
 
 </details>
 

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
@@ -11,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -157,5 +160,127 @@ func TestRunPostsSignedManifest(t *testing.T) {
 	}
 	if gotBundleLen == 0 {
 		t.Fatal("empty bundle")
+	}
+}
+
+// syncRepo prepares a repository with a binding file and points the CLI at
+// `handler`; it returns the result of run(). With `tmpInRepo` TMPDIR is the
+// repository's `.tmp` folder.
+func syncRepo(t *testing.T, handler http.Handler, files map[string]string, tmpInRepo bool) error {
+	t.Helper()
+	_, keyPEM := testKeyPEM(t)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	repo := t.TempDir()
+	cfg := "version: 1\nbinding_id: 11111111-2222-3333-4444-555555555555\npublish:\n  source: .\n"
+	files[".inprojects.ics"] = cfg
+	for name, body := range files {
+		p := filepath.Join(repo, name)
+		_ = os.MkdirAll(filepath.Dir(p), 0o755)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(repo)
+	if tmpInRepo {
+		t.Setenv("TMPDIR", filepath.Join(repo, ".tmp"))
+	}
+	t.Setenv("ICS_PRIVATE_KEY", keyPEM)
+	t.Setenv("ICS_ENDPOINT", srv.URL)
+	t.Setenv("CI_COMMIT_SHA", "abc123")
+	t.Setenv("CI_COMMIT_TIMESTAMP", "2026-09-30T10:00:00+02:00")
+	os.Args = []string{"ics-sync"}
+	return run()
+}
+
+// A proxy that redirects the POST to a login page answers 200 with HTML in
+// the end; that is not a sync.
+func TestRunFailsOnARedirect(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/login", http.StatusFound)
+	})
+	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("<html>Sign in</html>"))
+	})
+	if err := syncRepo(t, mux, map[string]string{"README.md": "# hi"}, false); err == nil {
+		t.Fatal("a redirect to a login page was taken for a sync")
+	}
+}
+
+func TestRunFailsOnAnAnswerThatIsNotANewVersion(t *testing.T) {
+	answers := map[string]func(w http.ResponseWriter){
+		"html 201": func(w http.ResponseWriter) {
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte("<html>ok</html>"))
+		},
+		"200 without version": func(w http.ResponseWriter) {
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		},
+		"cut-off body": func(w http.ResponseWriter) {
+			w.Header().Set("Content-Length", "100")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"version":`))
+			if hj, ok := w.(http.Hijacker); ok {
+				conn, _, _ := hj.Hijack()
+				conn.Close()
+			}
+		},
+	}
+	for name, answer := range answers {
+		t.Run(name, func(t *testing.T) {
+			h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				answer(w)
+			})
+			if err := syncRepo(t, h, map[string]string{"README.md": "# hi"}, false); err == nil {
+				t.Fatal("expected an error")
+			}
+		})
+	}
+}
+
+// With TMPDIR under the published folder the archive being written lies in
+// the tree it packs; it must stay out of the bundle.
+func TestRunLeavesTheTempArchiveOut(t *testing.T) {
+	var names []string
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		f, _, err := r.FormFile("bundle")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		defer f.Close()
+		gz, err := gzip.NewReader(f)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		tr := tar.NewReader(gz)
+		for {
+			hdr, err := tr.Next()
+			if err != nil {
+				break
+			}
+			names = append(names, hdr.Name)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"version":2}`))
+	})
+	files := map[string]string{"README.md": "# hi", ".tmp/keep": "x"}
+	if err := syncRepo(t, h, files, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range names {
+		if strings.HasPrefix(n, ".tmp/ics-sync-") {
+			t.Fatalf("the temp archive was packed: %v", names)
+		}
+	}
+	if !slices.Contains(names, "README.md") || !slices.Contains(names, ".tmp/keep") {
+		t.Fatalf("bundle = %v", names)
 	}
 }

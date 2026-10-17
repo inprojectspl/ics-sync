@@ -20,7 +20,10 @@ There are two kinds:
   The `code` value is stable; look it up in [Responses from ICS](#responses-from-ics). The
   `detail` text is for people and may change.
 
-Nothing is changed in ICS when a sync fails: the document keeps its current version.
+An upload ICS refused (any error with a `code`) changes nothing: the document keeps its current
+version. If the connection broke after ICS stored the version, the job fails although the version
+exists; running the job again then gets `409 replay_rejected`, which means the content is already
+in ICS.
 
 ## Errors from the binding file
 
@@ -30,6 +33,8 @@ Nothing is changed in ICS when a sync fails: the document keeps its current vers
 | `config: parse .inprojects.ics: yaml: …` | The file is not valid YAML, often because of broken indentation in `public_key` or an unquoted pattern starting with `*`. | Copy the file again from the binding dialog or fix the line the message names. Quote exclude patterns. |
 | `config: unsupported version: 0 (want 1)` | `version:` is missing or not `1`. | Set `version: 1`. |
 | `config: binding_id missing` | `binding_id:` is missing or empty. | Copy the ID from the binding dialog (step 2 of the setup screen). |
+| `config: parse .inprojects.ics: yaml: unmarshal errors: … field soruce not found …` | A key the CLI does not know, usually a typo. | Fix the key the message names. The keys are listed in [The binding file](binding-file.md#fields). |
+| `config: exclude "docs/[draft": syntax error in pattern` | A malformed exclude pattern. | Fix the pattern; see [Exclude files](binding-file.md#exclude-files). |
 
 ## Errors from the private key
 
@@ -87,6 +92,9 @@ These start with `POST <sync URL>:` and come from the connection, not from ICS.
 | `no such host`, `connection refused`, `i/o timeout` | The runner cannot reach ICS. | Check `ICS_ENDPOINT` and that this runner can reach the ICS host. Use a runner inside your network if ICS is internal (see [runner tags](ci-recipes.md#run-on-runners-with-tags)). |
 | `x509: certificate signed by unknown authority` | ICS uses a certificate from a private CA, which the image does not trust. | Store your CA certificate as a File variable and set `SSL_CERT_FILE` to it in the job; the CLI then trusts the certificates in that file. |
 | `Client.Timeout exceeded` | No response within 5 minutes, the CLI's limit for the whole request. | Check proxy timeouts in front of ICS and the bundle size. |
+| `reading the response: …` | The connection broke while ICS was answering. | Check the document's history in ICS: the version may have been stored. Running the job again is safe; if it was stored, the retry gets `409 replay_rejected`. |
+| `returned 302` (or another `3xx`) | Something in front of ICS redirects the request, often a login page of a proxy. The CLI does not follow redirects. | Point `ICS_ENDPOINT` at the ICS address itself, with `https://`, and let `/api/bindings/` through the proxy without a login. |
+| `unexpected response, not a new version from ICS` | A `201` whose body is not the answer ICS gives for a new version, for example a page from a proxy. | Check that `ICS_ENDPOINT` reaches ICS and not another service. |
 
 The CLI honours `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` if your runners need a proxy.
 
@@ -141,7 +149,7 @@ The commit timestamp is not later than the one of the last accepted sync
 
 | Situation | Fix |
 |---|---|
-| You re-ran the job for a commit that was already synced. | Nothing to fix: the content is already in ICS. Push a new commit to sync again. |
+| You re-ran the job for a commit that was already synced, including a retry after a run that stored the version but lost the answer. | Nothing to fix: the content is already in ICS. Push a new commit to sync again. |
 | A force push, amend or rebase left the branch tip with an older timestamp. | Push a new commit, or rotate the key to reset the clock. |
 | An older pipeline finished after a newer one. | Nothing to fix: the newer content is already in ICS. |
 | Two commits were pushed within the same second. | Push another commit. |
@@ -231,7 +239,7 @@ add `changes:` rules so that unchanged content does not sync.
 | Symptom | Fix |
 |---|---|
 | The runner refuses the job because of the pull policy | The runner allows only some policies (for example `if-not-present`). Remove `pull_policy: always` and pin a release tag ([Pin the image](ci-recipes.md#pin-the-image)). |
-| `permission denied` or `401` when pulling the image | The image `ghcr.io/inprojectspl/ics-sync` is public. Check the runner for registry credentials that force authentication (a custom `~/.docker/config.json`). |
+| `permission denied`, `401` or `403` when pulling the image | The image `ghcr.io/inprojectspl/ics-sync` is meant to be pulled without credentials. If `docker pull ghcr.io/inprojectspl/ics-sync:1` fails on a machine without registry logins too, the package is not public yet: [open an issue](https://github.com/inprojectspl/ics-sync/issues), or build the image from this repository and push it to your own registry. Otherwise check the runner for registry credentials that force authentication (a custom `~/.docker/config.json`). |
 | The job fails without running the `script:` lines | Check that `entrypoint: [""]` is under `image:`. The image's entrypoint is the CLI itself, so without the reset GitLab Runner cannot start the job's shell. |
 | The snippet in ICS shows `<registry>/ics-sync:<tag>` | The ICS administrator has not set `ICS_SYNC_IMAGE`. Use `ghcr.io/inprojectspl/ics-sync:1`. |
 

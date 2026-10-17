@@ -196,11 +196,17 @@ ics:sync:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
   script:
     - ics-sync --config docs/handbook.ics --private-key "@$ICS_KEY_HANDBOOK"
+
+ics:sync:runbooks:
+  extends: ics:sync
+  script:
     - ics-sync --config docs/runbooks.ics --private-key "@$ICS_KEY_RUNBOOKS"
 ```
 
-The lines run in order and the job stops at the first failure. To let one document sync even
-when the other fails, put each line in its own job.
+Use one job per document. In a single job the lines run in order and the job stops at the first
+failure; when the first document is stored and the second fails, a retry of the whole job stops
+at the first one again with `409 replay_rejected` and never reaches the second. With separate
+jobs each one is retried on its own.
 
 ## Publish on tags as well
 

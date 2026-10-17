@@ -38,9 +38,11 @@ metadata:
 An older binding file may still have a `publish.entry` field. The CLI ignores it: ICS picks the
 entry file itself (see [below](#what-the-content-must-look-like)), so you can delete the line.
 
-The CLI stops with an error if the file cannot be read, is not valid YAML, has a `version`
-other than `1` (a missing `version` counts as `0`) or has no `binding_id`. The messages are
-listed in [Troubleshooting](troubleshooting.md#errors-from-the-binding-file).
+The CLI stops with an error if the file cannot be read, is not valid YAML, has a key it does not
+know (a misspelt `source` or `exclude` would otherwise publish the whole working directory), has
+a `version` other than `1` (a missing `version` counts as `0`), has no `binding_id` or has a
+malformed exclude pattern. The messages are listed in
+[Troubleshooting](troubleshooting.md#errors-from-the-binding-file).
 
 ## What the content must look like
 
@@ -80,6 +82,7 @@ Rules worth knowing:
 - Other patterns follow Go's [`path.Match`](https://pkg.go.dev/path#Match) syntax: `*`, `?`,
   `[abc]` and `[a-z]`.
 - Quote patterns that start with `*`, as YAML treats an unquoted `*` as an alias.
+- A malformed pattern, such as an unclosed `[`, stops the CLI before anything is uploaded.
 
 Some files are always left out whatever you write: `.git` metadata, symbolic links, other
 non-regular files and empty directories. See
