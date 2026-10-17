@@ -6,6 +6,20 @@ project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-10-17
+
+### Fixed
+
+- A sync counts as done only when ICS answers `201` with the new version: the CLI no longer
+  follows redirects (a proxy login page answered `200` and the job passed), and fails on a
+  body it cannot read in full or that is not a version.
+- Unknown keys in the binding file and malformed exclude patterns are errors, so a typo such as
+  `soruce` no longer publishes the whole working directory.
+- The archive being written is never packed into itself when `TMPDIR` lies under
+  `publish.source`.
+
+## [1.1.0] - 2026-10-17
+
 ### Added
 
 - First public release: deterministic tar.gz bundle, Ed25519-signed manifest
