@@ -48,14 +48,16 @@ func main() {
 }
 
 func run() error {
-	cfgPath := flag.String("config", ".inprojects.ics", "path to .inprojects.ics")
-	privKeyArg := flag.String("private-key", "", "PEM private key: literal PEM or @path (default $ICS_PRIVATE_KEY)")
-	endpoint := flag.String("endpoint", "", "ICS base URL (default $ICS_ENDPOINT)")
-	commitSha := flag.String("commit-sha", "", "git commit SHA (default $CI_COMMIT_SHA, then 'manual')")
-	commitTS := flag.String("commit-ts", "", "RFC3339 commit timestamp (default $CI_COMMIT_TIMESTAMP, then now)")
-	verbose := flag.Bool("v", false, "verbose output")
-	showVersion := flag.Bool("version", false, "print the version and exit")
-	flag.Parse()
+	// A flag set per call, so tests can run the CLI more than once.
+	flags := flag.NewFlagSet("ics-sync", flag.ExitOnError)
+	cfgPath := flags.String("config", ".inprojects.ics", "path to .inprojects.ics")
+	privKeyArg := flags.String("private-key", "", "PEM private key: literal PEM or @path (default $ICS_PRIVATE_KEY)")
+	endpoint := flags.String("endpoint", "", "ICS base URL (default $ICS_ENDPOINT)")
+	commitSha := flags.String("commit-sha", "", "git commit SHA (default $CI_COMMIT_SHA, then 'manual')")
+	commitTS := flags.String("commit-ts", "", "RFC3339 commit timestamp (default $CI_COMMIT_TIMESTAMP, then now)")
+	verbose := flags.Bool("v", false, "verbose output")
+	showVersion := flags.Bool("version", false, "print the version and exit")
+	_ = flags.Parse(os.Args[1:])
 
 	if *showVersion {
 		fmt.Println("ics-sync", version)
@@ -113,7 +115,14 @@ func run() error {
 	}
 	defer os.Remove(tmp.Name())
 	hasher := sha256.New()
-	count, err := bundle.Write(io.MultiWriter(tmp, hasher), srcAbs, cfg.Publish.Exclude)
+	// TMPDIR may lie under the source (a `.tmp` in the checkout): the
+	// archive being written must not pack itself.
+	tmpAbs, err := filepath.Abs(tmp.Name())
+	if err != nil {
+		tmp.Close()
+		return fmt.Errorf("temp: %w", err)
+	}
+	count, err := bundle.Write(io.MultiWriter(tmp, hasher), srcAbs, cfg.Publish.Exclude, tmpAbs)
 	if err != nil {
 		tmp.Close()
 		return fmt.Errorf("bundle: %w", err)
@@ -152,11 +161,29 @@ func run() error {
 		return fmt.Errorf("POST %s: %w", syncURL, err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 300 {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("%s: reading the response: %w", syncURL, err)
+	}
+	if resp.StatusCode != http.StatusCreated {
 		return fmt.Errorf("%s returned %d: %s", syncURL, resp.StatusCode, string(body))
 	}
+	if err := checkSynced(body); err != nil {
+		return fmt.Errorf("%s: %w: %s", syncURL, err, string(body))
+	}
 	fmt.Println(string(body))
+	return nil
+}
+
+// checkSynced accepts only the answer ICS gives for a stored version, so a
+// proxy page or a cut-off body is not taken for a successful sync.
+func checkSynced(body []byte) error {
+	var out struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil || out.Version < 1 {
+		return errors.New("unexpected response, not a new version from ICS")
+	}
 	return nil
 }
 
@@ -253,7 +280,14 @@ func postMultipartStream(url string, manifest, sig []byte, bundlePath string) (*
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	req.Header.Set("User-Agent", "ics-sync/"+version)
-	client := &http.Client{Timeout: httpTimeout}
+	// A redirect would turn the POST into a GET of another page (a login
+	// page behind a proxy, say), so the first answer is the one that counts.
+	client := &http.Client{
+		Timeout: httpTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 	return client.Do(req)
 }
 
