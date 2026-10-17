@@ -50,3 +50,37 @@ func TestLoadRejectsInvalid(t *testing.T) {
 		}
 	}
 }
+
+// A misspelt key must fail: `soruce` would fall back to "." and publish the
+// whole working directory, `exlude` would drop every exclude.
+func TestLoadRejectsUnknownKeys(t *testing.T) {
+	cases := map[string]string{
+		"top level": "version: 1\nbinding_id: x\npublsh:\n  source: docs\n",
+		"source":    "version: 1\nbinding_id: x\npublish:\n  soruce: docs\n",
+		"exclude":   "version: 1\nbinding_id: x\npublish:\n  source: .\n  exlude:\n    - internal/**\n",
+	}
+	for name, body := range cases {
+		if _, err := load(t, body); err == nil {
+			t.Errorf("%s: expected an error", name)
+		}
+	}
+}
+
+func TestLoadRejectsBadExcludePattern(t *testing.T) {
+	_, err := load(t, "version: 1\nbinding_id: x\npublish:\n  exclude:\n    - \"docs/[draft\"\n")
+	if err == nil {
+		t.Fatal("expected an error for a malformed glob")
+	}
+}
+
+func TestLoadAcceptsTheFileICSGenerates(t *testing.T) {
+	body := "version: 1\nbinding_id: x\npublic_key: |\n  -----BEGIN PUBLIC KEY-----\n  MCowBQYDK2VwAyEA\n  -----END PUBLIC KEY-----\n" +
+		"publish:\n  source: .\n  kind: md_collection\n  # exclude:\n  #   - \"node_modules/**\"\nmetadata:\n  title: \"Team handbook\"\n"
+	c, err := load(t, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Metadata["title"] != "Team handbook" || c.Publish.Source != "." {
+		t.Fatalf("config = %+v", c)
+	}
+}
